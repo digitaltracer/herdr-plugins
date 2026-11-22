@@ -45,8 +45,11 @@ them; a summary of each task; a Board of all work; a standup draft; and Claude C
 - Board: clicking a card selects its tab and opens Tasks beside the Board; **Open** goes to the terminal; clicking
   any tab returns to Terminals. Cards for one issue or PR on several tabs merge (the agent's tab wins).
 - Linear **Start**: worktree on Linear's branch name, next to the repo as `<repo>-<issue id>` (a new space), or a
-  tab, Claude (plan, auto or ask-first) or Codex or a shell, the issue as the first message, repos listed from
-  settings' folders with one suggested, and optionally Move to In Progress.
+  tab, Claude (plan, auto or ask-first) or Codex or a shell, the whole issue as the first message, repos listed
+  from settings' folders with one suggested, and optionally Move to In Progress. The dialog reads the issue's full
+  description and comments from Linear as it opens (the list holds only the start of each description) and takes
+  them from the Linear tools' own answers, not from what the model writes back; Start waits for that, and a failed
+  read offers Retry or a first message that says it is incomplete.
 - Standup pane: click a bullet to edit, × drops it, press on one and release on another to move it, ✦ asks
   Claude to change one bullet, the box below changes the whole draft, Undo (10 steps).
 - Keys: ⌘⌥1 Terminals, ⌘⌥2 Board, ⌘⌥I Inbox, ⌘⌥L Linear, ⌘⌥T Tasks. Clicking an open panel's button hides it;
