@@ -44,9 +44,9 @@ them; a summary of each task; a Board of all work; a standup draft; and Claude C
   **Done** (counts toward the standup), **Skip** (doesn't); FYIs: **Seen**; closed ones: **Undo**.
 - Board: clicking a card selects its tab and opens Tasks beside the Board; **Open** goes to the terminal; clicking
   any tab returns to Terminals. Cards for one issue or PR on several tabs merge (the agent's tab wins).
-- Linear **Start**: worktree on Linear's branch name (a new space) or a tab, Claude (plan, auto or ask-first) or
-  Codex or a shell, the issue as the first message, repos listed from settings' folders with one suggested, and
-  optionally Move to In Progress.
+- Linear **Start**: worktree on Linear's branch name, next to the repo as `<repo>-<issue id>` (a new space), or a
+  tab, Claude (plan, auto or ask-first) or Codex or a shell, the issue as the first message, repos listed from
+  settings' folders with one suggested, and optionally Move to In Progress.
 - Standup pane: click a bullet to edit, × drops it, press on one and release on another to move it, ✦ asks
   Claude to change one bullet, the box below changes the whole draft, Undo (10 steps).
 - Keys: ⌘⌥1 Terminals, ⌘⌥2 Board, ⌘⌥I Inbox, ⌘⌥L Linear, ⌘⌥T Tasks. Clicking an open panel's button hides it;
@@ -72,7 +72,7 @@ them; a summary of each task; a Board of all work; a standup draft; and Claude C
 - `mods/cc-tasks/cc-task.mjs` (Node): `path` for agents, `hook` (Claude Code Stop hook; starts a background Haiku
   summary into `<repo>/.agents/tasks/.summary/<key>.json`). `install.mjs --hooks` adds the CLAUDE.md rule and hook.
 - Herdr commands used: `layout.select`, `layout.show/hide/resize`, `space.select`, `tab.select`, `tab.new`,
-  `space.new`, `pane.split`, `pane.focus`, `agent.focus`, the `worktree` mod with `{space, folder, branch, tab, argv}`.
+  `space.new`, `pane.split`, `pane.focus`, `agent.focus`.
 
 ## Watch out
 
