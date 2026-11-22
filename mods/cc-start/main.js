@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
-import { spaces, panes, props, theme, run, exec, knownAgents, openOverlay, closeOverlay, shared, setShared, pickFolder, home } from "herdr";
+import { spaces, panes, props, theme, run, exec, knownAgents, closeOverlay, shared, setShared, pickFolder, home } from "herdr";
 
 // Folders scanned for git repos, three levels deep: settings' repoRoots, or when unset the parent folders of
 // the repos open in Herdr (cc-status works them out). "Change folders" saves them to settings.
@@ -23,6 +23,13 @@ const MODES = [
   { id: "auto", label: "Auto mode" },
   { id: "manual", label: "Ask first" },
 ];
+
+// A repo's main checkout: a new worktree goes beside it, also when started from another worktree.
+async function mainOf(root) {
+  const r = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: root }).catch(() => null);
+  const dir = r?.code === 0 ? r.stdout.trim() : "";
+  return dir.endsWith("/.git") ? dir.slice(0, -5) : root;
+}
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 const shortTitle = (s) => s.split(/\s+/).reduce((acc, w) => (acc.length + w.length < 26 ? `${acc} ${w}`.trim() : acc), "");
@@ -72,14 +79,15 @@ export default class Start extends View {
         if (!cwd) continue;
         const r = await exec("git", ["rev-parse", "--show-toplevel"], { cwd }).catch(() => null);
         const root = r?.code === 0 ? r.stdout.trim() : null;
-        if (root && !byRoot.has(root)) byRoot.set(root, { root, name: root.split("/").pop(), space: s.id });
+        if (root && !byRoot.has(root)) byRoot.set(root, { root, main: await mainOf(root), name: root.split("/").pop(), space: s.id });
       }
       const scanned = [];
+      // -type d: a worktree's .git is a file, so only main checkouts are listed.
       for (const dir of roots) {
-        const r = await exec("find", [dir, "-maxdepth", "3", "-name", ".git", "-not", "-path", "*/node_modules/*"], { timeout: 15_000 }).catch(() => null);
+        const r = await exec("find", [dir, "-maxdepth", "3", "-name", ".git", "-type", "d", "-not", "-path", "*/node_modules/*"], { timeout: 15_000 }).catch(() => null);
         for (const line of (r?.stdout ?? "").split("\n").filter(Boolean)) {
           const root = line.replace(/\/\.git$/, "");
-          if (!byRoot.has(root)) scanned.push({ root, name: root.split("/").pop(), space: null });
+          if (!byRoot.has(root)) scanned.push({ root, main: root, name: root.split("/").pop(), space: null });
         }
       }
       scanned.sort((a, b) => a.name.localeCompare(b.name));
@@ -107,30 +115,58 @@ export default class Start extends View {
       if (r?.code !== 0) { this.pickError = "That folder isn't in a git repo."; cx.notify(); return; }
       const root = r.stdout.trim();
       this.pickError = null;
-      this.repo = this.repos.find((x) => x.root === root) ?? { root, name: root.split("/").pop(), space: null };
+      this.repo = this.repos.find((x) => x.root === root) ?? { root, main: await mainOf(root), name: root.split("/").pop(), space: null };
       if (!this.repos.includes(this.repo)) this.repos.push(this.repo);
       cx.notify();
     });
   }
 
-  start() {
+  // Beside the repo's main checkout, as <repo>-<issue id>.
+  worktreePath() {
+    return `${this.repo.main}-${props().issue.identifier.toLowerCase()}`;
+  }
+
+  // A branch that exists is checked out; a new one starts from the picked checkout's HEAD. Returns an error or "".
+  async addWorktree(branch, path) {
+    const git = (args) => exec("git", args, { cwd: this.repo.root, timeout: 600_000 });
+    try {
+      const exists = (await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
+      const r = await git(exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, "HEAD"]);
+      return r.code === 0 ? "" : (r.stderr || r.stdout || "").trim() || "git worktree add failed.";
+    } catch (error) { return String(error); }
+  }
+
+  start(cx) {
+    if (this.busy) return;
     const i = props().issue;
     const msg = this.message.value().trim();
     const agent = this.agents.find((a) => a.key === this.agent);
     const name = `${i.identifier} ${shortTitle(i.title)}`;
     const argv = !agent?.run ? null : agent.key === "claude" ? [...agent.run, "--permission-mode", this.mode] : [...agent.run];
-    closeOverlay(props().overlay);
+    const move = () => { if (this.move) setShared("cc.linear.move", { identifier: i.identifier, at: Date.now() }); };
     if (this.where === "worktree") {
-      // The worktree dialog takes no first message, so it goes on the agent's command line.
-      openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: {
-        space: this.repo.space, folder: this.repo.root, branch: i.branchName || `${i.identifier.toLowerCase()}-${slug(i.title)}`,
-        tab: name, argv: argv ? [...argv, ...(msg ? [msg] : [])] : undefined } });
-    } else if (this.repo.space) {
+      const path = this.worktreePath();
+      this.busy = true;
+      this.error = "";
+      cx.notify();
+      cx.spawn(async (cx) => {
+        this.error = await this.addWorktree(i.branchName || `${i.identifier.toLowerCase()}-${slug(i.title)}`, path);
+        this.busy = false;
+        if (this.error) return cx.notify();
+        // The first message goes on the agent's command line.
+        run("space.new", { folder: path, tab: name, argv: argv ? [...argv, ...(msg ? [msg] : [])] : undefined });
+        move();
+        closeOverlay(props().overlay);
+      });
+      return;
+    }
+    closeOverlay(props().overlay);
+    if (this.repo.space) {
       run("tab.new", { space: this.repo.space, name, folder: this.repo.root, argv: argv ?? undefined, task: argv && msg ? msg : undefined });
     } else {
       run("space.new", { folder: this.repo.root, tab: name, argv: argv ?? undefined, task: argv && msg ? msg : undefined });
     }
-    if (this.move) setShared("cc.linear.move", { identifier: i.identifier, at: Date.now() });
+    move();
   }
 
   render() {
@@ -145,7 +181,7 @@ export default class Start extends View {
     const button = (id, text, primary, action, enabled = true) => h_flex().id(id).h(32).px(14).items_center().rounded(8)
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised).opacity(enabled ? 1 : 0.5)
       .text_color(primary ? t.solid_foreground : t.foreground).text_size(12.5).font_medium().cursor_pointer()
-      .hover((s) => s.opacity(enabled ? 0.88 : 0.5)).on_click(() => enabled && action()).child(text);
+      .hover((s) => s.opacity(enabled ? 0.88 : 0.5)).on_click((_e, cx) => enabled && action(cx)).child(text);
     const check = (id, on, text, toggle) => h_flex().id(id).gap(8).items_center().cursor_pointer().on_click((_e, cx) => { toggle(); cx.notify(); })
       .child(div().size(14).rounded(3).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
         .text_size(10).text_color(t.accent_foreground).text_center().child(on ? "✓" : ""))
@@ -186,16 +222,17 @@ export default class Start extends View {
           .child(div().id("roots-save").flex_none().cursor_pointer().text_color(t.foreground).on_click((_e, cx) => this.saveRoots(cx)).child("Save"))))
       .when(Boolean(this.pickError), (el) => el.child(div().pt(6).text_size(11.5).text_color(t.blocked).child(this.pickError)))
       .child(div().pt(6).text_size(11.5).text_color(t.dim).child(!ready ? "Pick a repo"
-        : this.where === "worktree" ? `Branch ${branch}, in a new space` : `In ${this.repo.name}, on the branch it has checked out`))
+        : this.where === "worktree" ? `Branch ${branch}, in a new space at ${tilde(this.worktreePath())}` : `In ${this.repo.name}, on the branch it has checked out`))
       .child(label("AGENT"))
       .child(seg("agent", this.agents.map((a) => ({ id: a.key, label: a.name })), this.agent, (v) => { this.agent = v; }))
       .when(this.agent === "claude", (el) => el.child(label("START IN")).child(seg("mode", MODES, this.mode, (v) => { this.mode = v; })))
       .when(this.agent !== "shell", (el) => el.child(label("FIRST MESSAGE"))
         .child(Textarea.new(this.message).h(150).px(10).py(8).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12.5)))
       .when(i.stateType !== "started", (el) => el.child(div().pt(14).child(check("move", this.move, `Move ${i.identifier} to In Progress`, () => { this.move = !this.move; }))))
+      .when(Boolean(this.error), (el) => el.child(div().pt(10).text_size(11.5).text_color(t.blocked).child(this.error)))
       .child(h_flex().pt(18).gap(8).items_center()
         .child(div().flex_1().text_size(11.5).text_color(t.dim).child(`Opens a tab named “${i.identifier} ${shortTitle(i.title)}”`))
         .child(button("cs-cancel", "Cancel", false, () => closeOverlay(props().overlay)))
-        .child(button("cs-start", "Start", true, () => this.start(), ready)));
+        .child(button("cs-start", this.busy ? "Starting…" : "Start", true, (cx) => this.start(cx), ready && !this.busy)));
   }
 }
